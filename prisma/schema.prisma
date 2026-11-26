@@ -157,6 +157,8 @@ model Message {
   turnIndex      Int
   /// Server-side latency of this step in ms (STT for USER, LLM loop for ASSISTANT).
   latencyMs      Int?
+  /// LLM tokens (prompt + completion) spent producing this ASSISTANT reply, across all tool steps.
+  tokens         Int?
   createdAt      DateTime     @default(now()) @db.Timestamptz(3)
 
   @@index([conversationId, createdAt])

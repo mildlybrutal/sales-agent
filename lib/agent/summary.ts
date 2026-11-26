@@ -8,6 +8,7 @@
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { chatCompletion } from "@/lib/agent/llm";
+import { env } from "@/lib/env";
 import { recomputeLeadScore } from "@/lib/leads";
 import { formatINR } from "@/lib/format";
 import { formatIST } from "@/lib/time";
@@ -59,6 +60,7 @@ export async function generateCallSummary(conversationId: string) {
   } else {
     const { content } = await chatCompletion({
       jsonMode: true,
+      model: env.groqSummaryModel,
       temperature: 0.2,
       maxTokens: 600,
       messages: [

@@ -48,7 +48,7 @@ const location = z.enum(LOCATIONS);
 const propertyType = z.enum(["APARTMENT", "VILLA", "PENTHOUSE", "ROW_HOUSE"]);
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD");
 const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use 24-hour HH:mm");
-const propertyRef = z.string().min(3).max(80).describe("The property's `ref` value from search_properties results");
+const propertyRef = z.string().min(3).max(80).describe("`ref` from search_properties");
 
 /** LLMs often send null for "not provided"; treat null as absent. */
 const opt = <T extends z.ZodTypeAny>(s: T) => s.nullish().transform((v) => v ?? undefined);
@@ -76,60 +76,60 @@ function propertyForLLM(p: {
     name: p.name,
     location: p.location,
     price: formatINR(p.priceInr),
-    price_inr: p.priceInr,
-    bedrooms: p.bedrooms,
+    bhk: p.bedrooms,
     type: p.propertyType,
-    area_sqft: p.areaSqft,
-    amenities: p.amenities,
+    sqft: p.areaSqft,
+    amenities: p.amenities.slice(0, 4),
     availability: p.availability,
-    units_available: p.unitsAvailable,
+    units_left: p.unitsAvailable,
   };
 }
 
 // ---------- tool definitions ----------
 
+// `.describe()` texts are sent to the LLM on every call — keep them to a few words.
 const searchPropertiesArgs = z.object({
   location: opt(location),
-  max_price_inr: opt(z.number().int().positive().describe("Upper budget in rupees. 1 lakh = 100000, 1 crore = 10000000")),
+  max_price_inr: opt(z.number().int().positive().describe("rupees")),
   min_price_inr: opt(z.number().int().positive()),
   bedrooms: opt(z.number().int().min(1).max(6)),
   property_type: opt(propertyType),
-  query: opt(z.string().max(300).describe("Free-text description for semantic search, e.g. 'near IT park with pool'")),
+  query: opt(z.string().max(300).describe("soft preferences, e.g. near IT park")),
   include_sold_out: opt(z.boolean()),
 });
 
 const companyKnowledgeArgs = z.object({
-  query: z.string().min(2).max(300).describe("Question about EstateAI policies, payments, loans, visits or localities"),
+  query: z.string().min(2).max(300),
 });
 
 const customerHistoryArgs = z.object({
-  phone: opt(z.string().max(20).describe("Customer phone number if they gave one; omit to use the current caller")),
+  phone: opt(z.string().max(20).describe("omit for current caller")),
 });
 
 const saveLeadArgs = z.object({
   name: opt(z.string().min(1).max(80)),
   phone: opt(z.string().max(20)),
-  budget_max_inr: opt(z.number().int().positive().describe("Maximum budget in rupees")),
+  budget_max_inr: opt(z.number().int().positive().describe("rupees")),
   preferred_location: opt(location),
   property_type: opt(propertyType),
   bedrooms: opt(z.number().int().min(1).max(6)),
-  purchase_timeline: opt(z.string().max(80).describe("Customer's words, e.g. 'within 3 months'")),
-  purchase_timeline_months: opt(z.number().int().min(0).max(120).describe("Timeline converted to months")),
-  buying_intent: opt(z.enum(["HIGH", "MEDIUM", "LOW"]).describe("HIGH = ready to buy/visit soon, MEDIUM = actively exploring, LOW = just browsing")),
-  notes: opt(z.string().max(500).describe("Other requirements, e.g. 'needs pet-friendly, near school'")),
+  purchase_timeline: opt(z.string().max(80).describe("customer's words")),
+  purchase_timeline_months: opt(z.number().int().min(0).max(120)),
+  buying_intent: opt(z.enum(["HIGH", "MEDIUM", "LOW"]).describe("HIGH=ready/visit soon, MEDIUM=exploring, LOW=browsing")),
+  notes: opt(z.string().max(500)),
 });
 
 const checkAvailabilityArgs = z.object({
   property_ref: propertyRef,
-  date: isoDate.describe("Visit date YYYY-MM-DD in Asia/Kolkata"),
-  time: opt(hhmm.describe("Preferred start time HH:mm (24h, IST). Omit to list all free slots that day.")),
+  date: isoDate.describe("YYYY-MM-DD"),
+  time: opt(hhmm.describe("HH:mm IST; omit to list free slots")),
 });
 
 const bookAppointmentArgs = z.object({
   property_ref: propertyRef,
-  date: isoDate,
-  time: hhmm,
-  customer_confirmed: z.boolean().describe("true ONLY if the customer explicitly said yes to this exact property, date and time"),
+  date: isoDate.describe("YYYY-MM-DD"),
+  time: hhmm.describe("HH:mm IST"),
+  customer_confirmed: z.boolean().describe("customer explicitly said yes"),
 });
 
 const callSummaryArgs = z.object({});
@@ -148,8 +148,7 @@ function defineTool<S extends z.ZodTypeAny>(t: ToolDef<S>) {
 export const TOOLS = [
   defineTool({
     name: "search_properties",
-    description:
-      "Search EstateAI's property inventory. Uses exact database filters for location, price, bedrooms and type, and semantic vector search when `query` describes softer preferences. Only properties returned here may be recommended.",
+    description: "Search inventory with exact filters; `query` adds semantic ranking. Only recommend properties returned here.",
     schema: searchPropertiesArgs,
     async run(args, ctx) {
       const where: Prisma.PropertyWhereInput = {};
@@ -218,16 +217,15 @@ export const TOOLS = [
 
   defineTool({
     name: "search_company_knowledge",
-    description:
-      "Semantic search over EstateAI's knowledge base (company info, site-visit policy, booking & payment plans, home loans, RERA, locality guide, listing descriptions). Use for any factual question not answered by search_properties.",
+    description: "Search company knowledge: policies, payments, loans, site visits, RERA, localities.",
     schema: companyKnowledgeArgs,
     async run(args) {
-      const { method, results } = await retrieve(args.query, { limit: 4 });
+      const { method, results } = await retrieve(args.query, { limit: 3 });
       return {
         ok: true,
         result: {
           retrieval: method,
-          passages: results.map((r) => ({ source: r.title, relevance: Number(r.score.toFixed(3)), text: r.content })),
+          passages: results.map((r) => ({ source: r.title, text: r.content.length > 450 ? `${r.content.slice(0, 450)}…` : r.content })),
           ...(results.length === 0 ? { note: "Nothing relevant found. Say you will have a specialist follow up." } : {}),
         },
         display: `${method === "vector" ? "Vector" : "Keyword-fallback"} search: ${results.map((r) => r.title).filter((t, i, a) => a.indexOf(t) === i).join(", ") || "no results"}`,
@@ -237,8 +235,7 @@ export const TOOLS = [
 
   defineTool({
     name: "get_customer_history",
-    description:
-      "Look up a customer's saved profile, qualification, previous calls and appointments. Call with the phone number when a caller says they've spoken to us before.",
+    description: "Load a customer's profile, past calls and appointments (by phone for returning callers).",
     schema: customerHistoryArgs,
     async run(args, ctx) {
       let customerId = ctx.customerId;
@@ -298,8 +295,7 @@ export const TOOLS = [
 
   defineTool({
     name: "save_or_update_lead",
-    description:
-      "Persist anything the customer has told you about themselves or their requirements. Call it as soon as new details are shared (name, phone, budget, location, bedrooms, type, timeline, intent). Returns the deterministic lead score and which qualification fields are still missing.",
+    description: "Save any customer details as soon as they are shared. Returns lead score and missing fields.",
     schema: saveLeadArgs,
     async run(args, ctx) {
       let phone: string | undefined;
@@ -374,8 +370,7 @@ export const TOOLS = [
 
   defineTool({
     name: "check_appointment_availability",
-    description:
-      "Check site-visit availability for a property on a date (and optionally a time), in Asia/Kolkata. Visits run Mon–Sat, hourly slots 10:00–17:00. If the requested slot is free it is held for confirmation; you must then ask the customer to confirm before calling book_appointment.",
+    description: "Check site-visit slots (Mon–Sat, hourly 10:00–17:00 IST). A free slot is held for confirmation.",
     schema: checkAvailabilityArgs,
     async run(args, ctx) {
       const property = await resolveProperty(args.property_ref);
@@ -435,8 +430,7 @@ export const TOOLS = [
 
   defineTool({
     name: "book_appointment",
-    description:
-      "Book a site visit. Only call after check_appointment_availability returned available=true for this exact slot AND the customer has explicitly confirmed in a later message. The customer's name must already be saved. Returns success only if the database confirms the booking.",
+    description: "Book the held slot only after the customer confirmed in their reply. Success only if booked=true.",
     schema: bookAppointmentArgs,
     async run(args, ctx) {
       if (!args.customer_confirmed) {
@@ -533,8 +527,7 @@ export const TOOLS = [
 
   defineTool({
     name: "generate_call_summary",
-    description:
-      "Generate and save the structured call summary (requirements, lead score, sentiment, properties discussed, appointment, follow-ups). Call once when the customer is wrapping up / saying goodbye.",
+    description: "Save the call summary when the customer is wrapping up.",
     schema: callSummaryArgs,
     async run(_args, ctx) {
       const s = await generateCallSummary(ctx.conversationId);
@@ -550,13 +543,36 @@ export const TOOLS = [
 
 export type ToolName = (typeof TOOLS)[number]["name"];
 
+/** JSON Schema keywords that only matter for validation. Zod still enforces them in
+ *  executeTool(); omitting them from the LLM spec saves tokens on every call. */
+const VALIDATION_ONLY = new Set(["$schema", "minLength", "maxLength", "pattern", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "additionalProperties"]);
+
+function compactSchema(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(compactSchema);
+  if (!node || typeof node !== "object") return node;
+  const obj = node as Record<string, unknown>;
+  // Optional fields are emitted as anyOf[T, null]; they're already optional (not in `required`), so send just T.
+  if (Array.isArray(obj.anyOf)) {
+    const nonNull = obj.anyOf.filter((x) => (x as { type?: string }).type !== "null");
+    if (nonNull.length === 1) return compactSchema({ ...(nonNull[0] as object), ...(obj.description ? { description: obj.description } : {}) });
+  }
+  return Object.fromEntries(Object.entries(obj).filter(([k]) => !VALIDATION_ONLY.has(k)).map(([k, v]) => [k, compactSchema(v)]));
+}
+
+type ToolSpec = { type: "function"; function: { name: string; description: string; parameters: unknown } };
+let specCache: ToolSpec[] | null = null;
+
 /** OpenAI-compatible tool specs, generated from the Zod schemas (single source of truth). */
-export function toolSpecs() {
-  return TOOLS.map((t) => {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { $schema: _s, ...parameters } = z.toJSONSchema(t.schema, { io: "input", unrepresentable: "any" }) as Record<string, unknown>;
-    return { type: "function" as const, function: { name: t.name, description: t.description, parameters } };
-  });
+export function toolSpecs(exclude: readonly string[] = []): ToolSpec[] {
+  specCache ??= TOOLS.map((t) => ({
+    type: "function" as const,
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: compactSchema(z.toJSONSchema(t.schema, { io: "input", unrepresentable: "any" })),
+    },
+  }));
+  return exclude.length ? specCache.filter((s) => !exclude.includes(s.function.name)) : specCache;
 }
 
 export async function executeTool(name: string, rawArgs: string, ctx: ToolContext): Promise<ToolOutcome> {

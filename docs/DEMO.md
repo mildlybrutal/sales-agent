@@ -45,7 +45,8 @@
 8. **Date understanding relies on the LLM.** It resolves "Monday" or "tomorrow" using the IST date in the prompt. The server validates the resulting ISO date and time, but cannot know whether the model chose the date the customer meant. That is why the agent reads the slot back for confirmation.
 9. **English only.** Whisper is pinned to `language=en`. Hinglish mostly works; pure Hindi or Marathi will not.
 10. **Sentiment is per call**, classified at the end, not live per utterance.
-11. **No call audio is stored**, only transcripts. That's deliberate for privacy, but it means there's no playback in Call History.
+11. **Groq free tier.** About 8K tokens/min and 200K/day per model. With the compact prompts and the fallback model, that's roughly 2 tool turns per minute and a few calls' worth per day per model. Speak at a calm pace and avoid long test sessions on demo day.
+12. **No call audio is stored**, only transcripts. That's deliberate for privacy, but it means there's no playback in Call History.
 
 ## Likely interviewer questions & trade-offs
 

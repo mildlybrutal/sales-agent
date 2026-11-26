@@ -95,7 +95,7 @@ export function VoiceAgent() {
   const [level, setLevel] = useState(0);
   const [muted, setMuted] = useState(false);
   const [draft, setDraft] = useState("");
-  const [latency, setLatency] = useState<{ stt?: number; agent?: number } | null>(null);
+  const [latency, setLatency] = useState<{ stt?: number; agent?: number; tokens?: number } | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
 
@@ -250,7 +250,7 @@ export function VoiceAgent() {
           resumeListening();
           return;
         }
-        setLatency({ stt: data.sttLatencyMs, agent: data.latencyMs });
+        setLatency({ stt: data.sttLatencyMs, agent: data.latencyMs, tokens: data.tokens });
         setMessages((m) => [
           ...(input.audio ? [...m, { id: data.userMessageId, kind: "user" as const, text: data.transcript }] : m),
           ...data.toolEvents.map((t: { name: string; ok: boolean; display: string }, i: number) => ({ id: `${data.userMessageId}-t${i}`, kind: "tool" as const, text: t.display, ok: t.ok, meta: t.name })),
@@ -384,7 +384,7 @@ export function VoiceAgent() {
             <div className="text-xs text-muted-foreground">
               {conversationId ? `Call ${conversationId.slice(0, 8)}` : "No active call"}
               {inCall && startedAt ? ` · ${mm}:${ss}` : ""}
-              {latency && ` · STT ${latency.stt ?? "–"} ms · agent ${latency.agent} ms`}
+              {latency && ` · STT ${latency.stt ?? "–"} ms · agent ${latency.agent} ms · ${latency.tokens ?? "–"} tokens`}
             </div>
           </div>
           <div className="ml-auto flex items-center gap-2">

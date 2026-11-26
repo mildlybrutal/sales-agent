@@ -97,6 +97,8 @@ npm run ingest              # rebuild the knowledge base after editing lib/data/
 | `DATABASE_URL` | ✅ | `postgresql://estateai:estateai@localhost:5433/estateai` | Postgres connection (matches `docker-compose.yml`) |
 | `GROQ_API_KEY` | ✅ for calls | — | LLM chat completions and Whisper STT |
 | `GROQ_MODEL` | | `openai/gpt-oss-120b` | Any Groq chat model with tool calling (e.g. `llama-3.3-70b-versatile`) |
+| `GROQ_FALLBACK_MODEL` | | `openai/gpt-oss-20b` | Used when `GROQ_MODEL` is rate limited (separate per-model quota). `""` disables |
+| `GROQ_SUMMARY_MODEL` | | `openai/gpt-oss-20b` | Model for end-of-call summaries, so they don't use the conversation model's quota |
 | `GROQ_STT_MODEL` | | `whisper-large-v3-turbo` | Groq transcription model |
 | `GROQ_BASE_URL` | | `https://api.groq.com/openai/v1` | Point at any OpenAI-compatible endpoint |
 | `OPENAI_API_KEY` | optional | — | OpenAI TTS. Without it, the browser's voice is used |
@@ -108,17 +110,17 @@ npm run ingest              # rebuild the knowledge base after editing lib/data/
 If a key is missing, the app still runs. The **Pipeline status** panel on Live Agent and `GET /api/health` show what's missing, and API calls that need the missing key return `503 not_configured` with the variable name.
 
 ### Troubleshooting: `429 rate_limit_exceeded`
-Groq's free tier has low per-minute **token** limits per model (see <https://console.groq.com/settings/limits>). Each LLM call carries ~2.4k tokens of tool definitions and system prompt, plus history, and a turn that uses tools makes 2–3 calls. Groq also counts the requested `max_completion_tokens` toward the limit.
+Groq's free tier allows about 8K tokens/min and 200K tokens/day **per model** (see <https://console.groq.com/settings/limits>). Groq also counts the requested `max_completion_tokens` toward the limit.
 
-What the app does about it:
-- Waits and retries automatically when Groq asks for a wait of 12 s or less.
-- Otherwise returns `429` with `retryAfterSec`.
-- Logs which limit was hit (e.g. `tokens per minute (TPM)`).
+The agent is built to fit inside that budget:
+- **Compact prompts:** tool specs are ~0.9K tokens and the system prompt ~0.5K. Validation-only schema keywords stay in Zod rather than being sent to the model.
+- **Tool gating:** tools that can't apply right now are not sent. `book_appointment` is offered only while a slot is held.
+- **Lean history:** only the spoken exchanges from earlier turns are resent, never old tool results; their facts live in the system prompt's memory block.
+- **Second quota bucket:** if `GROQ_MODEL` is rate limited with a long wait, the call switches immediately to `GROQ_FALLBACK_MODEL`, and summaries run on `GROQ_SUMMARY_MODEL`. Short waits (≤ 3 s) are retried on the same model.
 
-If it keeps happening:
-- Pace turns, or switch `GROQ_MODEL` to a model with a higher limit on your account.
-- Or upgrade to Groq's Developer tier.
-- A daily limit (`TPD`) resets only after the wait shown in the error.
+Every turn logs a PII-free line such as `[agent] turn tokens=3196 calls=2 model=…`, and the Live Agent status bar shows tokens per turn.
+
+**Realistic free-tier capacity:** a turn that uses tools costs roughly 3–4K tokens, so about 2 turns/min per model and a few dozen turns a day per model, roughly doubled by the fallback. That's enough to demo at a calm pace. If you still hit a daily (`TPD`) limit on every model, it resets only after the wait shown in the error.
 
 ## Project structure
 

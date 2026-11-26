@@ -44,7 +44,7 @@ Everything appears live in a CRM dashboard.
 ## Limitations & next steps
 
 - **Turn-based voice:** no barge-in and no streamed STT/LLM. Next step: WebSocket/WebRTC with streaming STT → LLM → TTS.
-- **Groq free tier (8K tokens/min, 200K/day):** throttles calls to about one turn per minute and roughly 3 calls a day. Use the Developer plan for demos.
+- **Groq free tier (8K tokens/min, 200K/day per model):** compact prompts, tool gating and lean history bring a tool turn to ~3–4K tokens. A second free model takes over when the first is rate limited, and also runs summaries. That's enough for a demo at a calm pace, not for heavy use.
 - **Single-instance state:** the rate limiter and turn lock are in memory. Next step: move both to Redis.
 - **No dashboard authentication.**
 - **Scaling to 100k users** ([ARCHITECTURE.md §2](ARCHITECTURE.md)): stateless pods with Redis, a separate voice gateway, a queue with background workers, PgBouncer plus read replicas, HNSW indexing, telephony over SIP, and OpenTelemetry tracing.

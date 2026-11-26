@@ -8,6 +8,10 @@ export const env = {
   groqApiKey: process.env.GROQ_API_KEY?.trim() || undefined,
   groqBaseUrl: (process.env.GROQ_BASE_URL?.trim() || "https://api.groq.com/openai/v1").replace(/\/$/, ""),
   groqModel: process.env.GROQ_MODEL?.trim() || "openai/gpt-oss-120b",
+  /** Used when GROQ_MODEL is rate limited (Groq limits are per model). Set to "" to disable. */
+  groqFallbackModel: process.env.GROQ_FALLBACK_MODEL?.trim() ?? "openai/gpt-oss-20b",
+  /** End-of-call summaries run here so they don't consume the conversation model's quota. */
+  groqSummaryModel: process.env.GROQ_SUMMARY_MODEL?.trim() || "openai/gpt-oss-20b",
   groqSttModel: process.env.GROQ_STT_MODEL?.trim() || "whisper-large-v3-turbo",
   openaiApiKey: process.env.OPENAI_API_KEY?.trim() || undefined,
   openaiTtsModel: process.env.OPENAI_TTS_MODEL?.trim() || "gpt-4o-mini-tts",

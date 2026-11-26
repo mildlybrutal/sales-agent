@@ -22,43 +22,67 @@ export class LLMError extends Error {
 
 
 
+export interface CompletionResult {
+  content: string | null;
+  toolCalls: ToolCall[];
+  /** Model that actually answered (may be the fallback). */
+  model: string;
+  usage: { promptTokens: number; completionTokens: number; totalTokens: number };
+}
+
+/** Short waits are retried on the same model; anything longer switches model or fails fast. */
+const SHORT_WAIT_MS = 3_000;
+const MAX_RATE_LIMIT_WAIT_MS = 12_000;
+
 export async function chatCompletion(opts: {
   messages: ChatMessage[];
   tools?: unknown[];
   jsonMode?: boolean;
   temperature?: number;
   maxTokens?: number;
-}): Promise<{ content: string | null; toolCalls: ToolCall[] }> {
+  /** Defaults to GROQ_MODEL. */
+  model?: string;
+}): Promise<CompletionResult> {
   const key = requireGroqKey();
-  const isReasoningModel = /gpt-oss|qwen3/i.test(env.groqModel);
-  const body: Record<string, unknown> = {
-    model: env.groqModel,
+  // Groq rate limits are per model, so a second model is a second free quota bucket.
+  // Order: requested model → fallback → primary (so a summary on the fallback model can still fall back).
+  const models = [...new Set([opts.model ?? env.groqModel, env.groqFallbackModel, env.groqModel].filter(Boolean))] as string[];
+  let modelIdx = 0;
+
+  const bodyFor = (model: string): Record<string, unknown> => ({
+    model,
     messages: opts.messages,
     temperature: opts.temperature ?? 0.4,
     // Groq counts the *requested* max tokens against the per-minute token budget,
     // so keep this tight: spoken replies are ≤ ~60 words (+ low-effort reasoning).
-    max_completion_tokens: opts.maxTokens ?? 400,
-    ...(isReasoningModel ? { reasoning_effort: "low" } : {}),
+    max_completion_tokens: opts.maxTokens ?? 300,
+    ...(/gpt-oss|qwen3/i.test(model) ? { reasoning_effort: "low" } : {}),
     ...(opts.tools?.length ? { tools: opts.tools, tool_choice: "auto" } : {}),
     ...(opts.jsonMode ? { response_format: { type: "json_object" } } : {}),
-  };
+  });
 
-  // Retries: transient 5xx and Groq's occasional `tool_use_failed` (malformed
-  // tool call) once; 429 rate limits up to twice, waiting as long as Groq asks
-  // (Retry-After / "try again in 5.2s") when that fits inside a voice turn.
-  const MAX_RATE_LIMIT_WAIT_MS = 12_000;
+  // Retries: transient 5xx and Groq's occasional `tool_use_failed` (malformed tool
+  // call) once. 429s: a short wait is retried on the same model; a longer one
+  // switches to the fallback model immediately; otherwise wait if it fits in a turn.
   let rateLimitRetries = 0;
   for (let attempt = 0; ; attempt++) {
+    const model = models[modelIdx];
     const res = await fetch(`${env.groqBaseUrl}/chat/completions`, {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(bodyFor(model)),
       signal: AbortSignal.timeout(45_000),
     });
     if (res.ok) {
       const data = await res.json();
       const msg = data.choices?.[0]?.message ?? {};
-      return { content: msg.content ?? null, toolCalls: msg.tool_calls ?? [] };
+      const u = data.usage ?? {};
+      return {
+        content: msg.content ?? null,
+        toolCalls: msg.tool_calls ?? [],
+        model: data.model ?? model,
+        usage: { promptTokens: u.prompt_tokens ?? 0, completionTokens: u.completion_tokens ?? 0, totalTokens: u.total_tokens ?? 0 },
+      };
     }
     let code = `http_${res.status}`;
     let message = res.statusText;
@@ -72,7 +96,19 @@ export async function chatCompletion(opts: {
       const waitMs = rateLimitWaitMs(res.headers, message);
       // Log only which limit was hit (e.g. "tokens per minute (TPM)") and the wait — no org id or payload.
       const limit = /(tokens|requests) per (minute|day) \((\w+)\)/i.exec(message)?.[0] ?? "unknown limit";
-      console.warn(`[llm] rate limited by Groq: ${limit}; retry in ${waitMs ?? "?"} ms`);
+      const hasFallback = modelIdx < models.length - 1;
+      const shortWait = waitMs != null && waitMs <= SHORT_WAIT_MS;
+      console.warn(`[llm] ${model} rate limited: ${limit}; wait ${waitMs ?? "?"} ms${!shortWait && hasFallback ? ` → switching to ${models[modelIdx + 1]}` : ""}`);
+      if (shortWait && rateLimitRetries < 2) {
+        rateLimitRetries++;
+        await sleep(waitMs + 250);
+        continue;
+      }
+      if (hasFallback) {
+        modelIdx++;
+        rateLimitRetries = 0;
+        continue;
+      }
       if (rateLimitRetries < 2 && waitMs != null && waitMs <= MAX_RATE_LIMIT_WAIT_MS) {
         rateLimitRetries++;
         await sleep(waitMs + 250);

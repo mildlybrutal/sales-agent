@@ -10,18 +10,19 @@
 import "server-only";
 import { db } from "@/lib/db";
 import { requireGroqKey } from "@/lib/env";
-import { chatCompletion, type ChatMessage, type ToolCall } from "@/lib/agent/llm";
+import { chatCompletion, type ChatMessage } from "@/lib/agent/llm";
 import { buildSystemPrompt } from "@/lib/agent/prompt";
 import { executeTool, toolSpecs, type ToolContext } from "@/lib/agent/tools";
 import { missingQualificationFields } from "@/lib/leads";
-import { formatIST } from "@/lib/time";
+import { formatIST, istParts } from "@/lib/time";
 import type { Prisma } from "@/lib/generated/prisma/client";
 
 const MAX_TOOL_STEPS = 5;
-const HISTORY_WINDOW = 30;
-/** Tool results from earlier turns are trimmed: the key facts (requirements, properties
- *  discussed with refs, pending booking) are re-injected via the system prompt anyway. */
-const OLD_TOOL_RESULT_CHARS = 600;
+/** Spoken exchanges (customer + agent text) from earlier turns kept in the LLM context.
+ *  Earlier tool calls/results are NOT resent: the facts they produced (requirements,
+ *  properties discussed with refs, the held slot) are re-injected via the system prompt.
+ *  This keeps each call small enough for Groq's free-tier per-minute token budget. */
+const HISTORY_WINDOW = 12;
 
 export interface ToolEvent {
   name: string;
@@ -36,6 +37,9 @@ export interface TurnResult {
   appointmentId?: string;
   summaryGenerated: boolean;
   latencyMs: number;
+  /** Total LLM tokens (prompt + completion) used by this turn, as reported by the provider. */
+  tokens: number;
+  llmCalls: number;
 }
 
 export class ConversationError extends Error {
@@ -73,25 +77,32 @@ async function runTurnInner(conversationId: string, userText: string, opts: { st
 
   const ctx: ToolContext = { conversationId, customerId: conv.customerId, turnIndex };
   const history = await loadHistory(conversationId);
-  const tools = toolSpecs();
   const toolEvents: ToolEvent[] = [];
+  let tokens = 0;
+  const models = new Set<string>();
   let appointmentId: string | undefined;
   let summaryGenerated = false;
 
   for (let step = 0; step <= MAX_TOOL_STEPS; step++) {
-    const system = await buildContextPrompt(conversationId, ctx.customerId);
-    const { content, toolCalls } = await chatCompletion({
+    const { system, excludeTools } = await buildContextPrompt(conversationId, ctx.customerId);
+    const res = await chatCompletion({
       messages: [{ role: "system", content: system }, ...history],
       // On the final step withhold tools to force a spoken answer.
-      tools: step < MAX_TOOL_STEPS ? tools : undefined,
+      tools: step < MAX_TOOL_STEPS ? toolSpecs(excludeTools) : undefined,
     });
+    const { content, toolCalls } = res;
+    tokens += res.usage.totalTokens;
+    models.add(res.model);
 
     if (!toolCalls.length) {
       const reply = cleanForSpeech(content) || "Sorry, could you say that again?";
+      const latencyMs = Date.now() - started;
       const msg = await db.message.create({
-        data: { conversationId, role: "ASSISTANT", content: reply, turnIndex, latencyMs: Date.now() - started },
+        data: { conversationId, role: "ASSISTANT", content: reply, turnIndex, latencyMs, tokens },
       });
-      return { userMessageId: userMsg.id, assistantMessage: { id: msg.id, content: reply }, toolEvents, appointmentId, summaryGenerated, latencyMs: Date.now() - started };
+      // PII-free usage line, to see how a turn spends the provider's token budget.
+      console.info(`[agent] turn tokens=${tokens} calls=${step + 1} tools=${toolEvents.length} model=${[...models].join(",")} ms=${latencyMs}`);
+      return { userMessageId: userMsg.id, assistantMessage: { id: msg.id, content: reply }, toolEvents, appointmentId, summaryGenerated, latencyMs, tokens, llmCalls: step + 1 };
     }
 
     // Persist the assistant's tool-call request, then each tool result.
@@ -115,21 +126,20 @@ async function runTurnInner(conversationId: string, userText: string, opts: { st
   throw new Error("unreachable");
 }
 
-/** Rebuild OpenAI-format history from the DB, starting at a user message so tool pairs are never split. */
+/** Rebuild the spoken conversation (customer + agent text only) from the DB. Tool traffic
+ *  from earlier turns is omitted; the current turn's tool calls are appended in memory. */
 async function loadHistory(conversationId: string): Promise<ChatMessage[]> {
-  const rows = await db.message.findMany({ where: { conversationId }, orderBy: { createdAt: "desc" }, take: HISTORY_WINDOW });
-  rows.reverse();
-  const firstUser = rows.findIndex((m) => m.role === "USER");
-  const windowed = firstUser > 0 && rows.length === HISTORY_WINDOW ? rows.slice(firstUser) : rows;
-  return windowed.map((m): ChatMessage => {
-    if (m.role === "USER") return { role: "user", content: m.content };
-    if (m.role === "TOOL") {
-      const content = m.content.length > OLD_TOOL_RESULT_CHARS ? `${m.content.slice(0, OLD_TOOL_RESULT_CHARS)}… [earlier result truncated]` : m.content;
-      return { role: "tool", content, tool_call_id: m.toolCallId ?? "" };
-    }
-    const calls = m.toolCalls as unknown as ToolCall[] | null;
-    return calls?.length ? { role: "assistant", content: m.content || null, tool_calls: calls } : { role: "assistant", content: m.content };
+  const rows = await db.message.findMany({
+    where: { conversationId, role: { in: ["USER", "ASSISTANT"] } },
+    orderBy: { createdAt: "desc" },
+    take: HISTORY_WINDOW * 3, // headroom for assistant tool-call rows filtered out below
+    select: { role: true, content: true, toolCalls: true },
   });
+  return rows
+    .filter((m) => m.role === "USER" || (!m.toolCalls && m.content.trim()))
+    .slice(0, HISTORY_WINDOW)
+    .reverse()
+    .map((m): ChatMessage => (m.role === "USER" ? { role: "user", content: m.content } : { role: "assistant", content: m.content }));
 }
 
 /** Memory injection: everything persisted about the customer goes into the system prompt each step. */
@@ -148,19 +158,26 @@ async function buildContextPrompt(conversationId: string, customerId: string) {
     ? await db.property.findMany({ where: { id: { in: conv.propertiesDiscussed } }, select: { name: true, slug: true } })
     : [];
   const pending = conv.pendingBooking as { propertyId: string; startsAt: string } | null;
-  const pendingProperty = pending ? await db.property.findUnique({ where: { id: pending.propertyId }, select: { name: true } }) : null;
+  const pendingProperty = pending ? await db.property.findUnique({ where: { id: pending.propertyId }, select: { name: true, slug: true } }) : null;
+  const pendingAt = pending ? new Date(pending.startsAt) : null;
 
   const lead = customer.lead;
-  return buildSystemPrompt({
+  const system = buildSystemPrompt({
     customer: { name: customer.name, phone: customer.phone, isReturning: customer.conversations.length > 0 },
     lead,
     missing: lead
       ? missingQualificationFields(lead, customer)
       : ["name", "budget", "preferred_location", "bedrooms", "property_type", "purchase_timeline", "buying_intent"],
-    pendingBooking: pending && pendingProperty ? { propertyName: pendingProperty.name, when: formatIST(new Date(pending.startsAt)) } : null,
+    pendingBooking:
+      pendingProperty && pendingAt
+        ? { propertyName: pendingProperty.name, propertyRef: pendingProperty.slug, ...istParts(pendingAt), when: formatIST(pendingAt) }
+        : null,
     previousEnquiries: customer.conversations.map((c) => `${formatIST(c.startedAt)}: ${c.summary!.summary}`),
-    propertiesDiscussed: discussed.map((p) => `${p.name} (ref: ${p.slug})`),
+    propertiesDiscussed: discussed.map((p) => `${p.name} (ref ${p.slug})`),
   });
+  // Only offer tools that can apply right now (fewer tokens per call).
+  const excludeTools = [...(pending ? [] : ["book_appointment"]), ...(customer.phone ? ["get_customer_history"] : [])];
+  return { system, excludeTools };
 }
 
 /** Strip anything that would sound wrong when spoken. */
