@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { ClassificationBadge, ScoreBar, SentimentBadge } from "@/components/dashboard/badges";
 import { formatINR } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { playPcmWav, unlockAudio, type PcmPlayback } from "./pcm-player";
 import { useVoiceCapture } from "./use-voice-capture";
 
 type Phase = "idle" | "starting" | "listening" | "recording" | "processing" | "speaking" | "ending" | "ended";
@@ -103,6 +104,7 @@ export function VoiceAgent() {
   const convRef = useRef<string | null>(null);
   const mutedRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const pcmRef = useRef<PcmPlayback | null>(null);
   const endAfterSpeechRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -168,11 +170,32 @@ export function VoiceAgent() {
           speechSynthesis.speak(u);
         };
         if (!health?.tts.configured) return browserSpeak();
-        const audio = new Audio(`/api/messages/${messageId}/audio`);
-        audioRef.current = audio;
-        audio.onended = () => resolve();
-        audio.onerror = () => browserSpeak();
-        audio.play().catch(() => browserSpeak());
+        const src = `/api/messages/${messageId}/audio`;
+        const playElement = () => {
+          const audio = new Audio(src);
+          audioRef.current = audio;
+          audio.onended = () => resolve();
+          audio.onerror = () => browserSpeak();
+          audio.play().catch(() => browserSpeak());
+        };
+        // Streamed WAV (local Kokoro / Gemini) goes through Web Audio so playback starts with the
+        // first sentence; <audio> would buffer seconds of it first. mp3 (OpenAI) streams fine in <audio>.
+        if (typeof AudioContext === "undefined") return playElement();
+        fetch(src)
+          .then((res) => {
+            if (!res.ok || !res.body) throw new Error(`tts_${res.status}`);
+            if (!res.headers.get("content-type")?.startsWith("audio/wav")) {
+              res.body.cancel().catch(() => {});
+              return playElement();
+            }
+            const playback = playPcmWav(res.body);
+            pcmRef.current = playback;
+            return playback.done.then(() => {
+              if (pcmRef.current === playback) pcmRef.current = null;
+              resolve();
+            });
+          })
+          .catch(() => browserSpeak());
       }),
     [go, health?.tts.configured],
   );
@@ -180,6 +203,8 @@ export function VoiceAgent() {
   const stopSpeaking = useCallback(() => {
     audioRef.current?.pause();
     audioRef.current = null;
+    pcmRef.current?.stop();
+    pcmRef.current = null;
     if ("speechSynthesis" in window) speechSynthesis.cancel();
   }, []);
 
@@ -301,6 +326,7 @@ export function VoiceAgent() {
   }, [capture]);
 
   const startCall = useCallback(async () => {
+    unlockAudio(); // inside the click, so the greeting can play through Web Audio
     setConsentOpen(false);
     go("starting");
     setError(null);
@@ -565,7 +591,7 @@ export function VoiceAgent() {
                 <StatusRow ok={health.database.vectorChunks > 0} label="RAG (pgvector)" detail={`${health.database.vectorChunks} embedded chunks`} />
                 <StatusRow ok={health.stt.configured} label="Speech-to-text" detail={health.stt.configured ? `${health.stt.provider} ${health.stt.model}` : `set ${health.stt.envVar}`} />
                 <StatusRow ok={health.llm.configured} label="LLM" detail={health.llm.configured ? `groq ${health.llm.model}${health.llm.fallbackModels?.length ? ` → fallback ${health.llm.fallbackModels.join(", ")}` : ""}` : "set GROQ_API_KEY"} />
-                <StatusRow ok={health.tts.configured} warn={!health.tts.configured} label="Text-to-speech" detail={health.tts.configured ? `openai ${health.tts.model}` : "browser voice fallback (set OPENAI_API_KEY)"} />
+                <StatusRow ok={health.tts.configured} warn={!health.tts.configured} label="Text-to-speech" detail={health.tts.configured ? `${health.tts.provider} ${health.tts.model}` : "browser voice fallback (set GEMINI_API_KEY or OPENAI_API_KEY)"} />
                 <p className="pt-1 text-muted-foreground">Turn-based: audio is sent after you stop speaking; TTS audio streams back as it is generated.</p>
               </>
             )}

@@ -3,7 +3,7 @@
 A working MVP of a browser-based voice sales agent for **EstateAI**, a fictional real estate company in Pune. A customer talks to the agent ("Akash"). The agent finds matching properties, qualifies the lead, books a site visit in PostgreSQL and writes a call summary. Everything then shows up in a CRM-style dashboard.
 
 ```
-Mic → VAD → Whisper STT → Agent (Groq LLM + validated tools + RAG + memory) → OpenAI TTS → Speaker
+Mic → VAD → Whisper STT → Agent (Groq LLM + validated tools + RAG + memory) → TTS (local Kokoro, or OpenAI) → Speaker
                                          │
                                     PostgreSQL + pgvector  ──▶  Dashboard
 ```
@@ -21,7 +21,7 @@ Mic → VAD → Whisper STT → Agent (Groq LLM + validated tools + RAG + memory
 |---|---|
 | **Voice interface** | Hands-free microphone capture with energy-based voice-activity detection (auto end-of-utterance after 1.2 s of silence). Status indicator for listening, hearing, thinking and speaking, with a live mic level. Live transcript with tool-activity lines. Mute, "Done speaking", Skip and End-call controls. Typed fallback input. Mic-permission and error states. The call resumes after a page refresh. |
 | **STT** | Whisper (`whisper-large-v3-turbo` on Groq by default, or OpenAI `whisper-1`), with a Pune-vocabulary prompt and silence/hallucination filtering. |
-| **TTS** | OpenAI TTS (`gpt-4o-mini-tts`), **streamed** to an `<audio>` element so playback starts before synthesis finishes. Falls back to the browser's `speechSynthesis` (clearly labelled) when `OPENAI_API_KEY` is not set. |
+| **TTS** | **Kokoro-82M running locally** in the Node server (`kokoro-js`, free and unlimited, ~90 MB model downloaded on first use). It is synthesised sentence by sentence and streamed as PCM, which the browser plays through Web Audio as it arrives (first audio ≈ 1.5–3 s). With `OPENAI_API_KEY` set, OpenAI `gpt-4o-mini-tts` (mp3, `<audio>`) is used instead. Gemini TTS is opt-in (`TTS_PROVIDER=gemini`; free tier is 10 requests/day). If it hits its quota, Kokoro is used until the quota resets. The browser's `speechSynthesis` is the last resort. |
 | **Agent orchestrator** | System prompt for a professional sales persona. Tool-calling loop (up to 5 steps per turn). Memory injected from the DB on every step. Markdown stripped for speech. Per-conversation turn lock. |
 | **Tools (7)** | `search_properties`, `search_company_knowledge`, `get_customer_history`, `save_or_update_lead`, `check_appointment_availability`, `book_appointment`, `generate_call_summary`. All arguments are **Zod-validated**, and the JSON Schemas sent to the LLM are generated from the same Zod schemas. |
 | **RAG** | 13 listings and 6 company docs are chunked and embedded with a local `all-MiniLM-L6-v2` model (384-dim). They're stored in **pgvector** and retrieved by cosine distance. Structured filters (price, BHK, location, type) are plain SQL; semantic search re-ranks descriptive queries. There's a clearly labelled `keyword_fallback` (Postgres full-text search) if the embedder can't load. |
@@ -35,7 +35,7 @@ Mic → VAD → Whisper STT → Agent (Groq LLM + validated tools + RAG + memory
 
 ## Tech stack
 
-Next.js 16 (App Router, Cache Components) · TypeScript · Tailwind CSS v4 · shadcn/ui · Recharts · PostgreSQL 17 + pgvector · Prisma 7 (`@prisma/adapter-pg`) · Zod 4 · Groq (LLM + Whisper) · Gemini (optional fallback LLM) · OpenAI TTS · `@huggingface/transformers` (local embeddings) · `next-themes`.
+Next.js 16 (App Router, Cache Components) · TypeScript · Tailwind CSS v4 · shadcn/ui · Recharts · PostgreSQL 17 + pgvector · Prisma 7 (`@prisma/adapter-pg`) · Zod 4 · Groq (LLM + Whisper) · Gemini (optional fallback LLM) · Kokoro-82M (local TTS) · optional OpenAI / Gemini TTS · `@huggingface/transformers` (local embeddings) · `next-themes`.
 
 ---
 
@@ -45,7 +45,7 @@ Next.js 16 (App Router, Cache Components) · TypeScript · Tailwind CSS v4 · sh
 - Node.js 20+ (tested on 22)
 - Docker (for Postgres + pgvector), or any Postgres 15+ with the `vector` extension available
 - A **Groq API key** (free tier works): <https://console.groq.com/keys>
-- Optional: an **OpenAI API key** for natural TTS voices
+- Nothing extra for voice output: TTS runs locally (Kokoro). An **OpenAI API key** is optional, for OpenAI voices
 
 ### 1. Install and configure
 ```bash
@@ -97,13 +97,17 @@ npm run ingest              # rebuild the knowledge base after editing lib/data/
 | `DATABASE_URL` | ✅ | `postgresql://estateai:estateai@localhost:5433/estateai` | Postgres connection (matches `docker-compose.yml`) |
 | `GROQ_API_KEY` | ✅ for calls | — | LLM chat completions and Whisper STT |
 | `GROQ_MODEL` | | `openai/gpt-oss-120b` | Any Groq chat model with tool calling (e.g. `llama-3.3-70b-versatile`) |
-| `GEMINI_API_KEY` | optional | — | Enables Gemini (Google's OpenAI-compatible API) as the fallback / summary model |
+| `GEMINI_API_KEY` | optional | — | Enables Gemini as the fallback / summary model (and opt-in Gemini TTS) |
 | `LLM_FALLBACK_MODEL` | | `gemini-2.5-flash` if `GEMINI_API_KEY` is set, else `openai/gpt-oss-20b` | Comma-separated models tried when `GROQ_MODEL` is rate limited. `gemini-*` → Google, others → Groq. `""` disables. (`GROQ_FALLBACK_MODEL` still works.) |
 | `LLM_SUMMARY_MODEL` | | first fallback model | Model for end-of-call summaries, so they don't use the conversation model's quota |
 | `GEMINI_REASONING_EFFORT` | | `none` | Gemini thinking level. `none` is fastest on `gemini-2.5-flash`; use `low` for models that reject it |
 | `GROQ_STT_MODEL` | | `whisper-large-v3-turbo` | Groq transcription model |
 | `GROQ_BASE_URL` | | `https://api.groq.com/openai/v1` | Point at any OpenAI-compatible endpoint |
-| `OPENAI_API_KEY` | optional | — | OpenAI TTS. Without it, the browser's voice is used |
+| `TTS_PROVIDER` | | `openai` if `OPENAI_API_KEY` is set, else `kokoro` | `kokoro` (local), `openai`, `gemini` (free tier: 10 req/day) or `browser` |
+| `KOKORO_VOICE` | | `af_heart` | Any Kokoro voice, e.g. `af_bella`, `bf_emma` (British) |
+| `GEMINI_TTS_MODEL` | | `gemini-3.8-flash-tts` | e.g. `gemini-3.8-flash-lite-tts` |
+| `GEMINI_TTS_VOICE` | | `Sulafat` | Any Gemini prebuilt voice (`Achird`, `Kore`, …) |
+| `OPENAI_API_KEY` | optional | — | OpenAI TTS (preferred when set) |
 | `OPENAI_TTS_MODEL` | | `gpt-4o-mini-tts` | e.g. `tts-1` |
 | `OPENAI_TTS_VOICE` | | `alloy` | Any OpenAI voice |
 | `STT_PROVIDER` | | `groq` | `openai` to use OpenAI `whisper-1` (needs `OPENAI_API_KEY`) |
@@ -125,6 +129,9 @@ Every turn logs a PII-free line such as `[agent] turn tokens=3196 calls=2 model=
 
 **Realistic free-tier capacity:** a turn that uses tools costs roughly 3–4K tokens, so about 2 turns/min per model and a few dozen turns a day per model, roughly doubled by the fallback. That's enough to demo at a calm pace. If you still hit a daily (`TPD`) limit on every model, it resets only after the wait shown in the error.
 
+### Troubleshooting: `502 upstream_unreachable` / `[net] … unreachable`
+The server couldn't reach Groq or Gemini at all. Network errors are retried once, and the log line names the host and cause, e.g. `ENOTFOUND` or `ECONNRESET`. A `SELF_SIGNED_CERT_IN_CHAIN` cause means a firewall is intercepting HTTPS. Sophos and similar firewalls on office or campus networks do this. Switch networks, or install the organisation's root certificate (`/etc/pki/ca-trust/source/anchors/` + `update-ca-trust`) and start with `NODE_OPTIONS=--use-system-ca npm run dev`. Don't disable TLS verification: that would expose your API keys.
+
 ## Project structure
 
 ```
@@ -141,7 +148,9 @@ lib/
   rag.ts, embeddings.ts   Chunking, ingestion, pgvector retrieval
   scoring.ts, leads.ts    Deterministic lead scoring
   appointments.ts, time.ts  IST slots, availability, duplicate keys
-  speech.ts               Whisper STT, streaming TTS
+  speech.ts               Whisper STT, streaming TTS (provider choice + fallback)
+  tts-kokoro.ts           Local Kokoro-82M synthesis
+  fetch-retry.ts          One retry on network errors; names the host + cause
 prisma/
   schema.prisma, migrations/, seed.ts, ingest.ts
 scripts/smoke-tools.ts    Tool-layer workflow test

@@ -6,7 +6,7 @@ import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 
 /**
  * Streams TTS audio for an assistant message. The browser points an <audio>
- * element here, so playback starts while OpenAI is still synthesising. Text is
+ * element here, so playback starts while the TTS provider is still synthesising. Text is
  * loaded server-side by id — it never travels in the URL.
  */
 export async function GET(req: NextRequest, ctx: RouteContext<"/api/messages/[id]/audio">) {
@@ -17,8 +17,8 @@ export async function GET(req: NextRequest, ctx: RouteContext<"/api/messages/[id
   try {
     const msg = await db.message.findUnique({ where: { id }, select: { role: true, content: true } });
     if (!msg || msg.role !== "ASSISTANT" || !msg.content.trim()) return jsonError(404, "not_found", "No speakable message.");
-    const stream = await synthesizeStream(msg.content);
-    return new Response(stream, { headers: { "Content-Type": "audio/mpeg", "Cache-Control": "private, max-age=3600" } });
+    const { stream, contentType } = await synthesizeStream(msg.content);
+    return new Response(stream, { headers: { "Content-Type": contentType, "Cache-Control": "private, max-age=3600" } });
   } catch (e) {
     return handleRouteError(e, "GET /api/messages/[id]/audio");
   }

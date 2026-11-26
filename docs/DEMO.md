@@ -4,7 +4,7 @@
 
 **Before you start:**
 1. Run `npm run setup` and `npm run dev`.
-2. Put `GROQ_API_KEY` (and ideally `OPENAI_API_KEY`) in `.env`.
+2. Put `GROQ_API_KEY` (and optionally `GEMINI_API_KEY` for the fallback LLM) in `.env`. The voice runs locally; the first call downloads the ~90 MB Kokoro model.
 3. Open <http://localhost:3000>.
 
 | # | Do / say | What to point out |

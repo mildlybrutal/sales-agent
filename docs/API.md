@@ -39,7 +39,7 @@ Integration status. Values are booleans and names only.
   "database": { "ok": true, "properties": 13, "vectorChunks": 26 },
   "llm": { "configured": true, "provider": "groq", "model": "openai/gpt-oss-120b" },
   "stt": { "configured": true, "provider": "groq", "model": "whisper-large-v3-turbo", "envVar": "GROQ_API_KEY" },
-  "tts": { "configured": false, "provider": "browser", "model": "speechSynthesis" }
+  "tts": { "configured": true, "provider": "kokoro", "model": "Kokoro-82M (af_heart, local)" }
 }
 ```
 
@@ -139,7 +139,7 @@ Response:
 
 ## `GET /api/messages/:id/audio`
 
-Streams `audio/mpeg` TTS for an **assistant** message. The text is loaded server-side by id, so it never appears in the URL. The response streams from OpenAI so `<audio>` can start playing immediately. Returns `503 not_configured` when `OPENAI_API_KEY` is unset; the client then uses `speechSynthesis`.
+Streams TTS for an **assistant** message: `audio/wav` (24 kHz mono 16-bit PCM, open-ended length) from local Kokoro or Gemini, or `audio/mpeg` from OpenAI. The text is loaded server-side by id, so it never appears in the URL. Audio streams while it is synthesised. Returns `503 tts_unavailable` if synthesis fails, or `503 not_configured` when `TTS_PROVIDER=browser`; the client then uses `speechSynthesis`.
 
 ---
 

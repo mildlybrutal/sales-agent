@@ -9,13 +9,13 @@
 
 Everything appears live in a CRM dashboard.
 
-**Stack.** Next.js 16 (App Router) · TypeScript · Tailwind + shadcn/ui · PostgreSQL 17 + pgvector · Prisma 7 · Zod · Groq (LLM + Whisper STT) · Gemini (fallback LLM) · OpenAI TTS · local MiniLM embeddings · Recharts.
+**Stack.** Next.js 16 (App Router) · TypeScript · Tailwind + shadcn/ui · PostgreSQL 17 + pgvector · Prisma 7 · Zod · Groq (LLM + Whisper STT) · Gemini (fallback LLM) · Kokoro-82M local TTS (optional OpenAI) · local MiniLM embeddings · Recharts.
 
 ## Architecture
 
 ![EstateAI architecture: browser mic → turn API → Whisper STT and agent orchestrator ⇄ Groq LLM → validated backend tools (RAG, lead scoring, IST booking) → PostgreSQL + pgvector → CRM dashboard; replies flow to the Live Agent UI and streamed OpenAI TTS → speaker](images/architecture.png)
 
-- **Pipeline:** microphone → voice activity detection → Whisper STT → orchestrator (LLM ⇄ tools, up to 5 steps) → reply → streamed TTS playback. It is turn-based; TTS audio streams so playback starts early.
+- **Pipeline:** microphone → voice activity detection → Whisper STT → orchestrator (LLM ⇄ tools, up to 5 steps) → reply → streamed TTS playback (local Kokoro by default, OpenAI if keyed, browser voice as last resort). It is turn-based; TTS audio streams so playback starts early.
 - **Stateless server:** every message, including tool calls and results, is stored in Postgres. Each turn rebuilds the context from the DB, plus a *memory block* in the system prompt (known requirements, missing fields, past calls, properties discussed, pending booking). A page refresh resumes the call.
 - **Tools:** `search_properties`, `search_company_knowledge`, `get_customer_history`, `save_or_update_lead`, `check_appointment_availability`, `book_appointment`, `generate_call_summary`. The LLM never touches the database; it requests tools by name, and every argument set is Zod-validated.
 - **RAG:** hard constraints (price, BHK, location) are SQL. Soft preferences use vector similarity over 384-dim embeddings stored in pgvector. A labelled keyword fallback exists if the embedder is unavailable.

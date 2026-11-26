@@ -27,12 +27,32 @@ export const env = {
   openaiApiKey: process.env.OPENAI_API_KEY?.trim() || undefined,
   openaiTtsModel: process.env.OPENAI_TTS_MODEL?.trim() || "gpt-4o-mini-tts",
   openaiTtsVoice: process.env.OPENAI_TTS_VOICE?.trim() || "alloy",
+  /**
+   * Text-to-speech: "openai" | "kokoro" | "gemini" | "browser". Unset → openai if
+   * OPENAI_API_KEY is set, else local Kokoro. Gemini is opt-in (free tier: 10 req/day).
+   */
+  ttsProvider: resolveTtsProvider(process.env.TTS_PROVIDER?.trim().toLowerCase()),
+  geminiTtsModel: process.env.GEMINI_TTS_MODEL?.trim() || "gemini-3.8-flash-tts",
+  geminiTtsVoice: process.env.GEMINI_TTS_VOICE?.trim() || "Sulafat",
+  kokoroVoice: process.env.KOKORO_VOICE?.trim() || "af_heart",
   sttProvider: (process.env.STT_PROVIDER?.trim() === "openai" ? "openai" : "groq") as "groq" | "openai",
   embeddingModel: process.env.EMBEDDING_MODEL?.trim() || "Xenova/all-MiniLM-L6-v2",
 };
 
 env.summaryModel =
   (process.env.LLM_SUMMARY_MODEL ?? process.env.GROQ_SUMMARY_MODEL)?.trim() || env.fallbackModels[0] || env.groqModel;
+
+type TtsProvider = "openai" | "kokoro" | "gemini" | "browser";
+
+function resolveTtsProvider(raw: string | undefined): TtsProvider {
+  const hasOpenAI = Boolean(process.env.OPENAI_API_KEY?.trim());
+  const hasGemini = Boolean(process.env.GEMINI_API_KEY?.trim());
+  // A hosted choice without its key degrades to local Kokoro rather than failing every reply.
+  if (raw === "openai") return hasOpenAI ? "openai" : "kokoro";
+  if (raw === "gemini") return hasGemini ? "gemini" : "kokoro";
+  if (raw === "kokoro" || raw === "browser") return raw;
+  return hasOpenAI ? "openai" : "kokoro";
+}
 
 function parseModelList(raw: string | undefined, fallback: string): string[] {
   if (raw === undefined) return [fallback];
@@ -81,9 +101,13 @@ export function getPublicConfigStatus() {
       envVar: env.sttProvider === "openai" ? "OPENAI_API_KEY" : "GROQ_API_KEY",
     },
     tts: {
-      configured: Boolean(env.openaiApiKey),
-      provider: env.openaiApiKey ? "openai" : "browser",
-      model: env.openaiApiKey ? env.openaiTtsModel : "speechSynthesis",
+      configured: env.ttsProvider !== "browser",
+      provider: env.ttsProvider,
+      model:
+        env.ttsProvider === "openai" ? env.openaiTtsModel
+        : env.ttsProvider === "gemini" ? env.geminiTtsModel
+        : env.ttsProvider === "kokoro" ? `Kokoro-82M (${env.kokoroVoice}, local)`
+        : "speechSynthesis",
     },
   };
 }

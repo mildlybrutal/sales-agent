@@ -1,5 +1,6 @@
 import "server-only";
 import { env, providerFor, requireGroqKey, type LLMProvider } from "@/lib/env";
+import { fetchWithRetry } from "@/lib/fetch-retry";
 
 /** OpenAI-compatible chat message shapes (Groq implements this API). */
 export type ChatMessage =
@@ -88,7 +89,7 @@ export async function chatCompletion(opts: {
   for (let attempt = 0; ; attempt++) {
     const model = models[modelIdx];
     const provider = providerFor(model);
-    const res = await fetch(`${provider.baseUrl}/chat/completions`, {
+    const res = await fetchWithRetry(`${provider.baseUrl}/chat/completions`, {
       method: "POST",
       headers: { Authorization: `Bearer ${provider.apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify(bodyFor(model, provider)),

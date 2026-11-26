@@ -16,7 +16,7 @@ flowchart LR
   subgraph Browser
     MIC[Microphone<br/>getUserMedia] --> VAD[VAD + MediaRecorder<br/>use-voice-capture.ts]
     UI[Live Agent UI<br/>transcript · lead panel · status]
-    SPK[audio element / speechSynthesis]
+    SPK[Web Audio / audio element<br/>/ speechSynthesis]
     DASH[CRM Dashboard<br/>Overview · Leads · Appointments · Calls]
   end
 
@@ -36,7 +36,7 @@ flowchart LR
   subgraph External
     WHISPER[(Groq Whisper<br/>or OpenAI whisper-1)]
     LLM[(Groq LLM<br/>tool calling<br/>→ Gemini fallback)]
-    OTTS[(OpenAI TTS)]
+    OTTS[(Kokoro-82M local<br/>or OpenAI TTS)]
   end
 
   PG[(PostgreSQL 17<br/>+ pgvector)]
@@ -54,7 +54,7 @@ flowchart LR
   ORCH -- "persist every message" --> PG
   TURN -- "JSON: transcript, tool events, reply, lead" --> UI
   UI -- "audio src = message id" --> TTS --> OTTS
-  TTS -- "mp3 stream" --> SPK
+  TTS -- "wav (PCM) / mp3 stream" --> SPK
   DASH --> RSC --> PG
 ```
 
@@ -81,7 +81,7 @@ POST /turn (multipart audio) ───────▶ rate limit · validate siz
 ◀──────────────────────────────────── JSON {transcript, toolEvents, reply, lead, appointment}
 render transcript + lead panel
 new Audio(/api/messages/:id/audio) ─▶ load message text by id
-                                      synthesizeStream() ─────────────────────▶ OpenAI TTS
+                                      synthesizeStream() ─────────────────────▶ Kokoro (local) / OpenAI
 ◀────────────── mp3 bytes streamed as they are generated ────────────────────
 playback ends → resume listening
 ```
@@ -102,7 +102,7 @@ playback ends → resume listening
 | **Booking** | `lib/appointments.ts`, `book_appointment` | Visits run Mon–Sat in IST, hourly from 10:00 to 17:00, with at least 30 min notice and at most 60 days ahead. A booking has to pass four checks in order (see below). |
 | **Summary + sentiment** | `lib/agent/summary.ts` | Facts come from the DB. The LLM (JSON mode, Zod-validated) writes only the narrative, the sentiment and reason, and follow-ups. Sentiment is written to `Conversation`, `Lead` and `CallSummary`. It is separate from the lead score and never feeds into it. |
 | **Dashboard** | `app/(dashboard)`, `lib/queries.ts` | Server Components query Prisma directly. With Cache Components and Partial Prerendering, each page's shell is static and the DB-backed sections stream inside `<Suspense>`. Theming uses `next-themes` (class-based, light / dark / system) with CSS-variable status colours shared by badges and charts. |
-| **TTS** | `GET /api/messages/:id/audio` | Text is looked up by message id (never placed in a URL) and the OpenAI response body is piped straight through. The browser starts playing before synthesis completes. |
+| **TTS** | `GET /api/messages/:id/audio`, `lib/speech.ts` | Text is looked up by message id (never placed in a URL). Default: **Kokoro-82M (q8 ONNX) in-process** via `kokoro-js` on the shared transformers.js runtime. It needs no key and has no quota. Replies are synthesised one sentence at a time (serialised across requests), and each sentence's 24 kHz 16-bit PCM is sent after an open-ended WAV header. The client plays that stream with Web Audio (`components/agent/pcm-player.ts`), scheduling chunks as they arrive. An `<audio>` element would buffer ~4 s of it before starting. On this laptop CPU, first audio arrives in ~1.5–3 s and synthesis runs a little faster than real time. The model loads when `/api/health` is first called. With `OPENAI_API_KEY`, OpenAI `gpt-4o-mini-tts` (mp3 piped through to `<audio>`) is used instead. Gemini TTS is opt-in because its free tier is 10 requests/day. A 429 pauses it until the reset time it reports, and Kokoro serves those replies. Any hosted-provider failure falls back to Kokoro; if Kokoro itself fails, the route returns 503 and the browser's `speechSynthesis` speaks. IndicF5 (AI4Bharat) was evaluated and not used: it speaks only Indic languages (the agent is English), needs a Python/GPU sidecar, and is gated with no hosted API. |
 
 **Booking checks.** `book_appointment` succeeds only if:
 1. `check_appointment_availability` held this exact slot (`Conversation.pendingBooking`).
