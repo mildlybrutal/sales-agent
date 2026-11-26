@@ -1,0 +1,258 @@
+// EstateAI — AI Sales Voice Agent
+// PostgreSQL 17 + pgvector. Vector columns are declared as Unsupported and
+// read/written with parameterised raw SQL in lib/rag.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum PropertyType {
+  APARTMENT
+  VILLA
+  PENTHOUSE
+  ROW_HOUSE
+}
+
+enum LeadClassification {
+  HOT
+  WARM
+  COLD
+}
+
+enum BuyingIntent {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum LeadStage {
+  NEW
+  QUALIFYING
+  QUALIFIED
+  VISIT_BOOKED
+}
+
+enum Sentiment {
+  POSITIVE
+  NEUTRAL
+  NEGATIVE
+}
+
+enum ConversationStatus {
+  ACTIVE
+  ENDED
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  TOOL
+}
+
+enum AppointmentStatus {
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+}
+
+enum KnowledgeSource {
+  PROPERTY_LISTING
+  COMPANY_FAQ
+  POLICY
+}
+
+/// A person who has spoken to the agent. Phone is the natural identity key.
+model Customer {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String?
+  phone     String?  @unique
+  email     String?
+  /// true for rows created by prisma/seed.ts (demo data)
+  isDemo    Boolean  @default(false)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  lead          Lead?
+  conversations Conversation[]
+  appointments  Appointment[]
+}
+
+/// Current qualification state of a customer (one per customer).
+model Lead {
+  id         String   @id @default(uuid()) @db.Uuid
+  customerId String   @unique @db.Uuid
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  budgetMaxInr      Int?
+  preferredLocation String?
+  propertyType      PropertyType?
+  bedrooms          Int?
+  timeline          String?
+  timelineMonths    Int?
+  buyingIntent      BuyingIntent?
+  requirementsNotes String?
+
+  score          Int                @default(0)
+  classification LeadClassification @default(COLD)
+  /// { budget, timeline, intent, requirementMatch, reasons[] }
+  scoreBreakdown Json?
+  sentiment      Sentiment?
+  stage          LeadStage          @default(NEW)
+
+  isDemo    Boolean  @default(false)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([classification])
+}
+
+model Conversation {
+  id         String             @id @default(uuid()) @db.Uuid
+  customerId String             @db.Uuid
+  customer   Customer           @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  status     ConversationStatus @default(ACTIVE)
+  channel    String             @default("web_voice")
+
+  /// Recording/storage consent captured before the call started.
+  consentGivenAt DateTime @db.Timestamptz(3)
+  startedAt      DateTime @default(now()) @db.Timestamptz(3)
+  endedAt        DateTime? @db.Timestamptz(3)
+  durationSec    Int?
+  sentiment      Sentiment?
+  turnCount      Int       @default(0)
+
+  /// Slot offered by check_appointment_availability, awaiting customer confirmation.
+  /// { propertyId, startsAt, offeredAtTurn }
+  pendingBooking Json?
+  /// Property ids surfaced by search_properties during this call.
+  propertiesDiscussed String[] @default([])
+
+  isDemo    Boolean  @default(false)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  messages     Message[]
+  summary      CallSummary?
+  appointments Appointment[]
+
+  @@index([customerId])
+  @@index([startedAt])
+}
+
+model Message {
+  id             String       @id @default(uuid()) @db.Uuid
+  conversationId String       @db.Uuid
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           MessageRole
+  content        String
+  /// Assistant tool calls as returned by the LLM (OpenAI-compatible shape).
+  toolCalls      Json?
+  toolCallId     String?
+  toolName       String?
+  turnIndex      Int
+  /// Server-side latency of this step in ms (STT for USER, LLM loop for ASSISTANT).
+  latencyMs      Int?
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+
+  @@index([conversationId, createdAt])
+}
+
+model Property {
+  id             String       @id @default(uuid()) @db.Uuid
+  slug           String       @unique
+  name           String
+  location       String
+  address        String
+  priceInr       Int
+  bedrooms       Int
+  propertyType   PropertyType
+  areaSqft       Int
+  amenities      String[]
+  /// Human-readable possession status, e.g. "Ready to move" / "Possession Mar 2027"
+  availability   String
+  unitsAvailable Int
+  description    String
+  developer      String
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime     @updatedAt @db.Timestamptz(3)
+
+  appointments Appointment[]
+  documents    KnowledgeDocument[]
+
+  @@index([location, bedrooms, priceInr])
+}
+
+model Appointment {
+  id             String            @id @default(uuid()) @db.Uuid
+  customerId     String            @db.Uuid
+  customer       Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  propertyId     String            @db.Uuid
+  property       Property          @relation(fields: [propertyId], references: [id])
+  conversationId String?           @db.Uuid
+  conversation   Conversation?     @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  startsAt       DateTime          @db.Timestamptz(3)
+  endsAt         DateTime          @db.Timestamptz(3)
+  timezone       String            @default("Asia/Kolkata")
+  status         AppointmentStatus @default(CONFIRMED)
+  notes          String?
+
+  /// Duplicate-booking guards. Set to "<propertyId>|<startsAtISO>" and
+  /// "<customerId>|<startsAtISO>" while CONFIRMED, NULL once cancelled.
+  /// Postgres allows many NULLs under a UNIQUE constraint, so cancelled
+  /// slots can be rebooked while live slots cannot be double-booked.
+  propertySlotKey String? @unique
+  customerSlotKey String? @unique
+
+  isDemo    Boolean  @default(false)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([startsAt])
+}
+
+model CallSummary {
+  id             String       @id @default(uuid()) @db.Uuid
+  conversationId String       @unique @db.Uuid
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  customerRequirements    Json
+  summary                 String
+  leadScore               Int
+  leadClassification      LeadClassification
+  sentiment               Sentiment
+  sentimentReason         String?
+  propertiesDiscussed     Json
+  appointmentDetails      Json?
+  followUpRecommendations String[]
+  createdAt               DateTime @default(now()) @db.Timestamptz(3)
+}
+
+model KnowledgeDocument {
+  id         String          @id @default(uuid()) @db.Uuid
+  title      String
+  sourceType KnowledgeSource
+  propertyId String?         @db.Uuid
+  property   Property?       @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  content    String
+  createdAt  DateTime        @default(now()) @db.Timestamptz(3)
+
+  chunks KnowledgeChunk[]
+}
+
+model KnowledgeChunk {
+  id         String                     @id @default(uuid()) @db.Uuid
+  documentId String                     @db.Uuid
+  document   KnowledgeDocument          @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  chunkIndex Int
+  content    String
+  /// all-MiniLM-L6-v2 sentence embedding (384 dims, L2-normalised)
+  embedding  Unsupported("vector(384)")?
+  createdAt  DateTime                   @default(now()) @db.Timestamptz(3)
+
+  @@unique([documentId, chunkIndex])
+}

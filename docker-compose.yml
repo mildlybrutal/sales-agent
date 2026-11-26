@@ -1,0 +1,21 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: estateai-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: estateai
+      POSTGRES_PASSWORD: estateai
+      POSTGRES_DB: estateai
+    ports:
+      - "5433:5432"
+    volumes:
+      - estateai-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U estateai -d estateai"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  estateai-pgdata:

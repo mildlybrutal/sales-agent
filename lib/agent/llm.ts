@@ -1,0 +1,98 @@
+import "server-only";
+import { env, requireGroqKey } from "@/lib/env";
+
+/** OpenAI-compatible chat message shapes (Groq implements this API). */
+export type ChatMessage =
+  | { role: "system" | "user"; content: string }
+  | { role: "assistant"; content: string | null; tool_calls?: ToolCall[] }
+  | { role: "tool"; content: string; tool_call_id: string };
+
+export interface ToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+export class LLMError extends Error {
+  constructor(public status: number, public code: string, message: string, public retryAfterMs?: number | null) {
+    super(message);
+    this.name = "LLMError";
+  }
+}
+
+
+
+export async function chatCompletion(opts: {
+  messages: ChatMessage[];
+  tools?: unknown[];
+  jsonMode?: boolean;
+  temperature?: number;
+  maxTokens?: number;
+}): Promise<{ content: string | null; toolCalls: ToolCall[] }> {
+  const key = requireGroqKey();
+  const isReasoningModel = /gpt-oss|qwen3/i.test(env.groqModel);
+  const body: Record<string, unknown> = {
+    model: env.groqModel,
+    messages: opts.messages,
+    temperature: opts.temperature ?? 0.4,
+    // Groq counts the *requested* max tokens against the per-minute token budget,
+    // so keep this tight: spoken replies are ≤ ~60 words (+ low-effort reasoning).
+    max_completion_tokens: opts.maxTokens ?? 400,
+    ...(isReasoningModel ? { reasoning_effort: "low" } : {}),
+    ...(opts.tools?.length ? { tools: opts.tools, tool_choice: "auto" } : {}),
+    ...(opts.jsonMode ? { response_format: { type: "json_object" } } : {}),
+  };
+
+  // Retries: transient 5xx and Groq's occasional `tool_use_failed` (malformed
+  // tool call) once; 429 rate limits up to twice, waiting as long as Groq asks
+  // (Retry-After / "try again in 5.2s") when that fits inside a voice turn.
+  const MAX_RATE_LIMIT_WAIT_MS = 12_000;
+  let rateLimitRetries = 0;
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(`${env.groqBaseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(45_000),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const msg = data.choices?.[0]?.message ?? {};
+      return { content: msg.content ?? null, toolCalls: msg.tool_calls ?? [] };
+    }
+    let code = `http_${res.status}`;
+    let message = res.statusText;
+    try {
+      const err = await res.json();
+      code = err?.error?.code || code;
+      message = err?.error?.message || message;
+    } catch {}
+
+    if (res.status === 429) {
+      const waitMs = rateLimitWaitMs(res.headers, message);
+      // Log only which limit was hit (e.g. "tokens per minute (TPM)") and the wait — no org id or payload.
+      const limit = /(tokens|requests) per (minute|day) \((\w+)\)/i.exec(message)?.[0] ?? "unknown limit";
+      console.warn(`[llm] rate limited by Groq: ${limit}; retry in ${waitMs ?? "?"} ms`);
+      if (rateLimitRetries < 2 && waitMs != null && waitMs <= MAX_RATE_LIMIT_WAIT_MS) {
+        rateLimitRetries++;
+        await sleep(waitMs + 250);
+        continue;
+      }
+      throw new LLMError(429, code, message, waitMs);
+    }
+    const retryable = res.status >= 500 || code === "tool_use_failed";
+    if (!retryable || attempt >= 1) throw new LLMError(res.status, code, message);
+    await sleep(300);
+  }
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Groq sends `retry-after` (seconds) and a message like "Please try again in 1m2.5s" / "in 820ms". */
+function rateLimitWaitMs(headers: Headers, message: string): number | null {
+  const header = Number(headers.get("retry-after"));
+  if (Number.isFinite(header) && header > 0) return header * 1000;
+  const m = /try again in (?:(\d+)m)?(?:([\d.]+)s)?(?:([\d.]+)ms)?/i.exec(message);
+  if (!m || (!m[1] && !m[2] && !m[3])) return null;
+  return Math.ceil((Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0)) * 1000 + Number(m[3] ?? 0));
+}
