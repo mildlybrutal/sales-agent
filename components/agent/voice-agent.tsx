@@ -39,7 +39,7 @@ interface Lead {
 
 interface Health {
   database: { ok: boolean; properties: number; vectorChunks: number };
-  llm: { configured: boolean; model: string };
+  llm: { configured: boolean; model: string; fallbackModels?: string[] };
   stt: { configured: boolean; provider: string; model: string; envVar: string };
   tts: { configured: boolean; provider: string; model: string };
 }
@@ -439,7 +439,7 @@ export function VoiceAgent() {
           {messages.map((m) =>
             m.kind === "tool" ? (
               <div key={m.id} className="flex items-start gap-2 pl-1 text-xs text-muted-foreground">
-                <Wrench className={cn("mt-0.5 size-3 shrink-0", m.ok ? "" : "text-amber-600")} />
+                <Wrench className={cn("mt-0.5 size-3 shrink-0", m.ok ? "" : "text-amber-600 dark:text-amber-400")} />
                 <span>
                   <span className="font-mono">{m.meta}</span> — {m.text}
                 </span>
@@ -461,7 +461,7 @@ export function VoiceAgent() {
         </div>
 
         {error && (
-          <div className="mx-4 mb-3 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          <div className="mx-4 mb-3 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-400/25 dark:bg-amber-500/10 dark:text-amber-200">
             <AlertTriangle className="mt-0.5 size-4 shrink-0" /> {error}
           </div>
         )}
@@ -484,9 +484,9 @@ export function VoiceAgent() {
       {/* Side panel */}
       <div className="space-y-4">
         {appointment && (
-          <Card className="border-emerald-200 bg-emerald-50/50">
+          <Card className="border-emerald-200 bg-emerald-50/50 dark:border-emerald-400/25 dark:bg-emerald-500/10">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-sm text-emerald-800">
+              <CardTitle className="flex items-center gap-2 text-sm text-emerald-800 dark:text-emerald-300">
                 <CalendarCheck className="size-4" /> Visit booked
               </CardTitle>
             </CardHeader>
@@ -564,7 +564,7 @@ export function VoiceAgent() {
                 <StatusRow ok={health.database.ok} label="PostgreSQL" detail={health.database.ok ? `${health.database.properties} properties` : "unreachable"} />
                 <StatusRow ok={health.database.vectorChunks > 0} label="RAG (pgvector)" detail={`${health.database.vectorChunks} embedded chunks`} />
                 <StatusRow ok={health.stt.configured} label="Speech-to-text" detail={health.stt.configured ? `${health.stt.provider} ${health.stt.model}` : `set ${health.stt.envVar}`} />
-                <StatusRow ok={health.llm.configured} label="LLM" detail={health.llm.configured ? `groq ${health.llm.model}` : "set GROQ_API_KEY"} />
+                <StatusRow ok={health.llm.configured} label="LLM" detail={health.llm.configured ? `groq ${health.llm.model}${health.llm.fallbackModels?.length ? ` → fallback ${health.llm.fallbackModels.join(", ")}` : ""}` : "set GROQ_API_KEY"} />
                 <StatusRow ok={health.tts.configured} warn={!health.tts.configured} label="Text-to-speech" detail={health.tts.configured ? `openai ${health.tts.model}` : "browser voice fallback (set OPENAI_API_KEY)"} />
                 <p className="pt-1 text-muted-foreground">Turn-based: audio is sent after you stop speaking; TTS audio streams back as it is generated.</p>
               </>
@@ -611,8 +611,8 @@ function Field({ k, v }: { k: string; v: string | null | undefined }) {
 function StatusRow({ ok, warn, label, detail }: { ok: boolean; warn?: boolean; label: string; detail: string }) {
   return (
     <div className="flex items-center gap-2">
-      <span className={cn("size-1.5 shrink-0 rounded-full", ok ? "bg-emerald-500" : warn ? "bg-amber-500" : "bg-red-500")} />
-      <span className="font-medium">{label}</span>
+      <span className={cn("size-1.5 shrink-0 rounded-full", ok ? "bg-[var(--status-good)]" : warn ? "bg-[var(--status-warm)]" : "bg-[var(--status-hot)]")} />
+      <span className="shrink-0 font-medium">{label}</span>
       <span className="truncate text-muted-foreground">{detail}</span>
     </div>
   );
@@ -620,13 +620,14 @@ function StatusRow({ ok, warn, label, detail }: { ok: boolean; warn?: boolean; l
 
 function StatusDot({ phase, level }: { phase: Phase; level: number }) {
   const color =
-    phase === "recording" ? "bg-red-500" : phase === "listening" ? "bg-emerald-500" : phase === "speaking" ? "bg-blue-500" : phase === "processing" || phase === "starting" || phase === "ending" ? "bg-amber-500" : "bg-slate-300";
+    // No blues: recording red, listening green, agent speaking = foreground (neutral), busy amber, idle grey.
+    phase === "recording" ? "bg-[var(--status-hot)]" : phase === "listening" ? "bg-[var(--status-good)]" : phase === "speaking" ? "bg-foreground" : phase === "processing" || phase === "starting" || phase === "ending" ? "bg-[var(--status-warm)]" : "bg-[var(--status-muted)]";
   return (
     <div className="relative flex size-9 items-center justify-center">
       {(phase === "listening" || phase === "recording") && (
         <span className={cn("absolute inset-0 rounded-full opacity-20 transition-transform", color)} style={{ transform: `scale(${0.6 + level * 0.9})` }} />
       )}
-      {phase === "processing" ? <Loader2 className="size-4 animate-spin text-amber-600" /> : <span className={cn("relative size-3 rounded-full", color)} />}
+      {phase === "processing" ? <Loader2 className="size-4 animate-spin text-[var(--status-warm)]" /> : <span className={cn("relative size-3 rounded-full", color)} />}
     </div>
   );
 }

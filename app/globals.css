@@ -81,6 +81,12 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+  /* Status colours used by badges and charts (red / amber / green / neutral grey — no blues). */
+  --status-hot: oklch(0.577 0.245 27.325);
+  --status-warm: oklch(0.666 0.179 58.318);
+  --status-good: oklch(0.596 0.145 163.225);
+  --status-muted: oklch(0.708 0 0);
+  --status-empty: oklch(0.922 0 0);
 }
 
 .dark {
@@ -109,12 +115,17 @@
   --chart-5: oklch(0.269 0 0);
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary: oklch(0.922 0 0);
   --sidebar-primary-foreground: oklch(0.985 0 0);
   --sidebar-accent: oklch(0.269 0 0);
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+  --status-hot: oklch(0.704 0.191 22.216);
+  --status-warm: oklch(0.828 0.189 84.429);
+  --status-good: oklch(0.765 0.177 163.223);
+  --status-muted: oklch(0.556 0 0);
+  --status-empty: oklch(0.371 0 0);
 }
 
 @layer base {
@@ -125,6 +136,10 @@
     @apply bg-background text-foreground;
   }
   html {
-    @apply font-sans;
+    @apply bg-background font-sans;
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
   }
 }

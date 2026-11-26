@@ -9,7 +9,7 @@
 
 Everything appears live in a CRM dashboard.
 
-**Stack.** Next.js 16 (App Router) · TypeScript · Tailwind + shadcn/ui · PostgreSQL 17 + pgvector · Prisma 7 · Zod · Groq (LLM + Whisper STT) · OpenAI TTS · local MiniLM embeddings · Recharts.
+**Stack.** Next.js 16 (App Router) · TypeScript · Tailwind + shadcn/ui · PostgreSQL 17 + pgvector · Prisma 7 · Zod · Groq (LLM + Whisper STT) · Gemini (fallback LLM) · OpenAI TTS · local MiniLM embeddings · Recharts.
 
 ## Architecture
 
@@ -36,7 +36,7 @@ Everything appears live in a CRM dashboard.
 
 ## Status & verification
 
-- **Built:** voice UI with consent gate, typed fallback, resume after refresh, and a pipeline-status panel. Dashboard pages: Overview (KPIs, lead and sentiment charts), Live Agent, Leads, Appointments and Call History. Rate limiting, server-only keys and PII-free logs.
+- **Built:** voice UI with consent gate, typed fallback, resume after refresh, and a pipeline-status panel. Dashboard pages: Overview (KPIs, lead and sentiment charts), Live Agent, Leads, Appointments and Call History. Light / dark / system theme with a neutral, blue-free palette. Rate limiting, server-only keys and PII-free logs.
 - **Checks:** `typecheck`, `lint` and `build` pass. `npm run test:tools` exercises the full booking workflow and its safeguards against the real DB.
 - **Verified with a scripted LLM stand-in:** the end-to-end demo flow ran through the API: "3BHK in Baner under 1 Cr" → 2 matches → lead 45 WARM → 100 HOT → slot held → booked on "yes" → summary saved → visible in the dashboard.
 - **Not yet verified:** a live call with the real model and a microphone.
@@ -44,7 +44,7 @@ Everything appears live in a CRM dashboard.
 ## Limitations & next steps
 
 - **Turn-based voice:** no barge-in and no streamed STT/LLM. Next step: WebSocket/WebRTC with streaming STT → LLM → TTS.
-- **Groq free tier (8K tokens/min, 200K/day per model):** compact prompts, tool gating and lean history bring a tool turn to ~3–4K tokens. A second free model takes over when the first is rate limited, and also runs summaries. That's enough for a demo at a calm pace, not for heavy use.
+- **Groq free tier (8K tokens/min, 200K/day per model):** compact prompts, tool gating and lean history bring a tool turn to ~3–4K tokens. A fallback model takes over when Groq is rate limited and also runs summaries: Gemini 2.5 Flash when `GEMINI_API_KEY` is set, otherwise Groq gpt-oss-20b. That's enough for a demo at a calm pace, not for heavy use.
 - **Single-instance state:** the rate limiter and turn lock are in memory. Next step: move both to Redis.
 - **No dashboard authentication.**
 - **Scaling to 100k users** ([ARCHITECTURE.md §2](ARCHITECTURE.md)): stateless pods with Redis, a separate voice gateway, a queue with background workers, PgBouncer plus read replicas, HNSW indexing, telephony over SIP, and OpenTelemetry tracing.

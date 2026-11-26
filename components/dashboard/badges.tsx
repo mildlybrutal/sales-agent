@@ -1,12 +1,13 @@
 import { cn } from "@/lib/utils";
 
+/** Neutral palette with red / amber / green accents only (no blues), light + dark. */
 const tone = {
-  red: "bg-red-50 text-red-700 ring-red-600/15",
-  amber: "bg-amber-50 text-amber-800 ring-amber-600/20",
-  slate: "bg-slate-100 text-slate-700 ring-slate-500/15",
-  green: "bg-emerald-50 text-emerald-700 ring-emerald-600/15",
-  blue: "bg-blue-50 text-blue-700 ring-blue-600/15",
-  violet: "bg-violet-50 text-violet-700 ring-violet-600/15",
+  red: "bg-red-50 text-red-700 ring-red-600/15 dark:bg-red-500/10 dark:text-red-400 dark:ring-red-400/25",
+  amber: "bg-amber-50 text-amber-800 ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-400/25",
+  green: "bg-emerald-50 text-emerald-700 ring-emerald-600/15 dark:bg-emerald-500/10 dark:text-emerald-400 dark:ring-emerald-400/25",
+  grey: "bg-muted text-muted-foreground ring-border",
+  /** Neutral but emphasised: used for "confirmed" states. */
+  strong: "bg-background text-foreground ring-foreground/25",
 } as const;
 
 function Pill({ color, children, className }: { color: keyof typeof tone; children: React.ReactNode; className?: string }) {
@@ -19,16 +20,17 @@ function Pill({ color, children, className }: { color: keyof typeof tone; childr
 
 export function ClassificationBadge({ value }: { value: string | null | undefined }) {
   if (!value) return <span className="text-muted-foreground">—</span>;
-  return <Pill color={value === "HOT" ? "red" : value === "WARM" ? "amber" : "slate"}>{value}</Pill>;
+  return <Pill color={value === "HOT" ? "red" : value === "WARM" ? "amber" : "grey"}>{value}</Pill>;
 }
 
 export function SentimentBadge({ value }: { value: string | null | undefined }) {
   if (!value) return <span className="text-xs text-muted-foreground">Not analysed</span>;
-  return <Pill color={value === "POSITIVE" ? "green" : value === "NEGATIVE" ? "red" : "slate"}>{value[0] + value.slice(1).toLowerCase()}</Pill>;
+  return <Pill color={value === "POSITIVE" ? "green" : value === "NEGATIVE" ? "red" : "grey"}>{value[0] + value.slice(1).toLowerCase()}</Pill>;
 }
 
 export function StatusBadge({ value }: { value: string }) {
-  const color = value === "CONFIRMED" ? "blue" : value === "COMPLETED" ? "green" : value === "CANCELLED" ? "slate" : value === "ACTIVE" ? "amber" : value === "VISIT_BOOKED" ? "violet" : "slate";
+  const color: keyof typeof tone =
+    value === "CONFIRMED" ? "strong" : value === "COMPLETED" || value === "VISIT_BOOKED" ? "green" : value === "ACTIVE" ? "amber" : "grey";
   return <Pill color={color}>{value.replace("_", " ").toLowerCase().replace(/^\w/, (c) => c.toUpperCase())}</Pill>;
 }
 
@@ -44,7 +46,7 @@ export function DemoBadge({ isDemo }: { isDemo: boolean }) {
 }
 
 export function ScoreBar({ score }: { score: number }) {
-  const color = score >= 75 ? "bg-red-500" : score >= 45 ? "bg-amber-500" : "bg-slate-400";
+  const color = score >= 75 ? "bg-[var(--status-hot)]" : score >= 45 ? "bg-[var(--status-warm)]" : "bg-[var(--status-muted)]";
   return (
     <div className="flex items-center gap-2">
       <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">

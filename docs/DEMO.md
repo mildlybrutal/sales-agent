@@ -9,7 +9,7 @@
 
 | # | Do / say | What to point out |
 |---|---|---|
-| 1 | Open **Overview**. Toggle **Demo data / Live calls**. | Seeded rows are badged *Demo*; agent-generated rows are badged *Live*. |
+| 1 | Open **Overview**. Toggle **Demo data / Live calls**. *(Optional)* Switch the theme with the icon next to the logo. | Seeded rows are badged *Demo*; agent-generated rows are badged *Live*. The theme cycles Light → Dark → System and is remembered. |
 | 2 | Go to **Live Agent** and check the **Pipeline status** card. | DB, pgvector chunk count, and the STT, LLM and TTS providers. |
 | 3 | Click **Start call** and tick the consent box. | Consent is enforced server-side (`consent: true`); the mic permission prompt appears. |
 | 4 | Agent greets you. Say: **"I'm looking for a 3BHK apartment in Baner under one crore."** | Tool lines appear: `save_or_update_lead`, then `search_properties` → Skyline Residences (₹94 L) and Baner Greens (₹88 L). The live lead panel fills in. |
@@ -45,7 +45,7 @@
 8. **Date understanding relies on the LLM.** It resolves "Monday" or "tomorrow" using the IST date in the prompt. The server validates the resulting ISO date and time, but cannot know whether the model chose the date the customer meant. That is why the agent reads the slot back for confirmation.
 9. **English only.** Whisper is pinned to `language=en`. Hinglish mostly works; pure Hindi or Marathi will not.
 10. **Sentiment is per call**, classified at the end, not live per utterance.
-11. **Groq free tier.** About 8K tokens/min and 200K/day per model. With the compact prompts and the fallback model, that's roughly 2 tool turns per minute and a few calls' worth per day per model. Speak at a calm pace and avoid long test sessions on demo day.
+11. **Free-tier LLM quotas.** Groq allows about 8K tokens/min and 200K/day per model. With compact prompts, roughly 2 tool turns fit per minute. When Groq is rate limited, the call falls back to Gemini (if `GEMINI_API_KEY` is set) or to Groq's `gpt-oss-20b`. Gemini replies are slower (~1–4 s), and Google may use free-tier prompts to improve its products, so stick to demo data.
 12. **No call audio is stored**, only transcripts. That's deliberate for privacy, but it means there's no playback in Call History.
 
 ## Likely interviewer questions & trade-offs

@@ -60,7 +60,7 @@ export async function generateCallSummary(conversationId: string) {
   } else {
     const { content } = await chatCompletion({
       jsonMode: true,
-      model: env.groqSummaryModel,
+      model: env.summaryModel,
       temperature: 0.2,
       maxTokens: 600,
       messages: [

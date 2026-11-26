@@ -30,12 +30,12 @@ Mic → VAD → Whisper STT → Agent (Groq LLM + validated tools + RAG + memory
 | **Sentiment** | LLM classification of the **customer's** sentiment at the end of the call (Positive / Neutral / Negative, with a reason). Stored separately from the lead score. |
 | **Booking** | DB-backed availability in Asia/Kolkata: Mon–Sat, hourly slots 10:00–17:00, at least 30 min notice, at most 60 days ahead. Alternatives are offered when a slot is unavailable. Booking needs a prior availability check, a customer reply after the offer, `customer_confirmed=true` and a saved name. Duplicates are stopped by **unique slot-key constraints** in Postgres, and repeat calls are idempotent. |
 | **Summaries** | Structured call summary. Facts (requirements, score, properties, appointment) come from the DB. The LLM writes only the narrative, the sentiment and follow-ups, and its output is Zod-validated. |
-| **Dashboard** | Overview (KPIs plus lead and sentiment charts and recent activity), Live Agent, Leads (filters, score breakdown, history), Appointments (upcoming / past), Call History (summaries, transcripts, regenerate). **Demo vs Live** badges and filters on every view. |
+| **Dashboard** | Overview (KPIs plus lead and sentiment charts and recent activity), Live Agent, Leads (filters, score breakdown, history), Appointments (upcoming / past), Call History (summaries, transcripts, regenerate). **Demo vs Live** badges and filters on every view. **Light / dark / system theme** toggle in the sidebar, using a neutral palette with red, amber and green status accents only (no blues). |
 | **Security** | API keys stay on the server only. Consent is required before a call is created. Inputs are validated with Zod. Per-IP rate limits. No transcripts or PII in logs. Tool payloads are never sent to the browser. |
 
 ## Tech stack
 
-Next.js 16 (App Router, Cache Components) · TypeScript · Tailwind CSS v4 · shadcn/ui · Recharts · PostgreSQL 17 + pgvector · Prisma 7 (`@prisma/adapter-pg`) · Zod 4 · Groq (LLM + Whisper) · OpenAI TTS · `@huggingface/transformers` (local embeddings).
+Next.js 16 (App Router, Cache Components) · TypeScript · Tailwind CSS v4 · shadcn/ui · Recharts · PostgreSQL 17 + pgvector · Prisma 7 (`@prisma/adapter-pg`) · Zod 4 · Groq (LLM + Whisper) · Gemini (optional fallback LLM) · OpenAI TTS · `@huggingface/transformers` (local embeddings) · `next-themes`.
 
 ---
 
@@ -97,8 +97,10 @@ npm run ingest              # rebuild the knowledge base after editing lib/data/
 | `DATABASE_URL` | ✅ | `postgresql://estateai:estateai@localhost:5433/estateai` | Postgres connection (matches `docker-compose.yml`) |
 | `GROQ_API_KEY` | ✅ for calls | — | LLM chat completions and Whisper STT |
 | `GROQ_MODEL` | | `openai/gpt-oss-120b` | Any Groq chat model with tool calling (e.g. `llama-3.3-70b-versatile`) |
-| `GROQ_FALLBACK_MODEL` | | `openai/gpt-oss-20b` | Used when `GROQ_MODEL` is rate limited (separate per-model quota). `""` disables |
-| `GROQ_SUMMARY_MODEL` | | `openai/gpt-oss-20b` | Model for end-of-call summaries, so they don't use the conversation model's quota |
+| `GEMINI_API_KEY` | optional | — | Enables Gemini (Google's OpenAI-compatible API) as the fallback / summary model |
+| `LLM_FALLBACK_MODEL` | | `gemini-2.5-flash` if `GEMINI_API_KEY` is set, else `openai/gpt-oss-20b` | Comma-separated models tried when `GROQ_MODEL` is rate limited. `gemini-*` → Google, others → Groq. `""` disables. (`GROQ_FALLBACK_MODEL` still works.) |
+| `LLM_SUMMARY_MODEL` | | first fallback model | Model for end-of-call summaries, so they don't use the conversation model's quota |
+| `GEMINI_REASONING_EFFORT` | | `none` | Gemini thinking level. `none` is fastest on `gemini-2.5-flash`; use `low` for models that reject it |
 | `GROQ_STT_MODEL` | | `whisper-large-v3-turbo` | Groq transcription model |
 | `GROQ_BASE_URL` | | `https://api.groq.com/openai/v1` | Point at any OpenAI-compatible endpoint |
 | `OPENAI_API_KEY` | optional | — | OpenAI TTS. Without it, the browser's voice is used |
@@ -116,7 +118,8 @@ The agent is built to fit inside that budget:
 - **Compact prompts:** tool specs are ~0.9K tokens and the system prompt ~0.5K. Validation-only schema keywords stay in Zod rather than being sent to the model.
 - **Tool gating:** tools that can't apply right now are not sent. `book_appointment` is offered only while a slot is held.
 - **Lean history:** only the spoken exchanges from earlier turns are resent, never old tool results; their facts live in the system prompt's memory block.
-- **Second quota bucket:** if `GROQ_MODEL` is rate limited with a long wait, the call switches immediately to `GROQ_FALLBACK_MODEL`, and summaries run on `GROQ_SUMMARY_MODEL`. Short waits (≤ 3 s) are retried on the same model.
+- **Fallback model:** if `GROQ_MODEL` is rate limited with a long wait, the call switches immediately to the next model in `LLM_FALLBACK_MODEL`, and summaries run on `LLM_SUMMARY_MODEL`. Short waits (≤ 3 s) are retried on the same model.
+- **Gemini as fallback:** set `GEMINI_API_KEY` and the fallback becomes `gemini-2.5-flash` on Google's free tier, an entirely separate quota. Tested with real tool calls: it accepts the same tools and history. It's slower than Groq (~1–4 s per call with thinking off), which is fine for occasional fallback turns. On the free tier Google may use prompts to improve its products, so use it with demo data only.
 
 Every turn logs a PII-free line such as `[agent] turn tokens=3196 calls=2 model=…`, and the Live Agent status bar shows tokens per turn.
 

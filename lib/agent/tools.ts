@@ -556,6 +556,11 @@ function compactSchema(node: unknown): unknown {
     const nonNull = obj.anyOf.filter((x) => (x as { type?: string }).type !== "null");
     if (nonNull.length === 1) return compactSchema({ ...(nonNull[0] as object), ...(obj.description ? { description: obj.description } : {}) });
   }
+  // Nullable primitives may be emitted as type: ["boolean", "null"]; Gemini rejects type arrays.
+  if (Array.isArray(obj.type)) {
+    const types = obj.type.filter((t) => t !== "null");
+    if (types.length === 1) return compactSchema({ ...obj, type: types[0] });
+  }
   return Object.fromEntries(Object.entries(obj).filter(([k]) => !VALIDATION_ONLY.has(k)).map(([k, v]) => [k, compactSchema(v)]));
 }
 

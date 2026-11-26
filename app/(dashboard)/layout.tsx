@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { Building2 } from "lucide-react";
 import { Nav, NavFallback } from "@/components/dashboard/nav";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 export default function DashboardLayout({ children }: LayoutProps<"/">) {
   return (
@@ -13,6 +14,9 @@ export default function DashboardLayout({ children }: LayoutProps<"/">) {
           <div className="leading-tight">
             <div className="text-sm font-semibold">EstateAI</div>
             <div className="text-xs text-muted-foreground">Sales Console</div>
+          </div>
+          <div className="ml-auto">
+            <ThemeToggle />
           </div>
         </div>
         <div className="px-3 pb-3 md:pb-0">
