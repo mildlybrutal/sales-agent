@@ -13,21 +13,7 @@ Everything appears live in a CRM dashboard.
 
 ## Architecture
 
-```mermaid
-flowchart LR
-  MIC[Browser mic<br/>VAD + MediaRecorder] -->|audio per turn| TURN[/turn API/]
-  TURN --> STT[Whisper STT]
-  TURN --> ORCH[Agent orchestrator]
-  ORCH <-->|messages + tool specs| LLM[Groq LLM]
-  ORCH -->|validated tool calls| TOOLS[7 backend tools<br/>Zod + business rules]
-  TOOLS --> RAG[RAG: SQL filters + pgvector]
-  TOOLS --> SCORE[Deterministic lead score]
-  TOOLS --> BOOK[IST booking + duplicate guards]
-  RAG & SCORE & BOOK & ORCH --> PG[(PostgreSQL + pgvector)]
-  ORCH -->|reply| UI[Live Agent UI]
-  UI -->|message id| TTS[Streamed OpenAI TTS] --> SPK[Speaker]
-  PG --> DASH[CRM Dashboard]
-```
+![EstateAI architecture: browser mic → turn API → Whisper STT and agent orchestrator ⇄ Groq LLM → validated backend tools (RAG, lead scoring, IST booking) → PostgreSQL + pgvector → CRM dashboard; replies flow to the Live Agent UI and streamed OpenAI TTS → speaker](images/architecture.png)
 
 - **Pipeline:** microphone → voice activity detection → Whisper STT → orchestrator (LLM ⇄ tools, up to 5 steps) → reply → streamed TTS playback. It is turn-based; TTS audio streams so playback starts early.
 - **Stateless server:** every message, including tool calls and results, is stored in Postgres. Each turn rebuilds the context from the DB, plus a *memory block* in the system prompt (known requirements, missing fields, past calls, properties discussed, pending booking). A page refresh resumes the call.
