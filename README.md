@@ -11,6 +11,7 @@ Mic → VAD → Whisper STT → Agent (Groq LLM + validated tools + RAG + memory
 - **Architecture & scaling plan:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - **API reference:** [docs/API.md](docs/API.md)
 - **Demo script, limitations, interview Q&A:** [docs/DEMO.md](docs/DEMO.md)
+- **One-page project report:** [docs/REPORT.md](docs/REPORT.md)
 
 ---
 
